@@ -33,13 +33,10 @@ class ImageLabelDataset(Dataset):
         if self.transform:
             image = self.transform(image)
         return image, label
-    
+
 def create_loader(data, batch_size: int, shuffle: bool) -> torch.utils.data.DataLoader:
     """
     PyTorch DataLoader with optional shuffling and fixed random seed
-
-    Inspired by Vanessa Przybylo's COCPIT repo
-    (https://github.com/vprzybylo/cocpit/blob/master/cocpit/data_loaders.py)
 
     Parameters:
     ----------
@@ -64,28 +61,3 @@ def create_loader(data, batch_size: int, shuffle: bool) -> torch.utils.data.Data
         batch_size = batch_size,
         shuffle = shuffle
     )
-
-def save_valloader(val_data: torch.utils.data.DataLoader) -> None:
-
-    """
-    Save validation dataset DataLoader
-
-    Parameters:
-    ----------
-    val_data : torch.DataLoader
-        Validation dataset
-
-    Inspired by Vanessa Przybylo's COCPIT repo
-    (https://github.com/vprzybylo/cocpit/blob/master/cocpit/data_loaders.py)
-    """
-    VAL_LOADER_SAVE_DIR = config.BASEDIR
-
-    VAL_LOADER_SAVENAME = (
-        f"{VAL_LOADER_SAVE_DIR}epochs{config.MAX_EPOCHS}_"
-        f"batch_size{config.BATCH_SIZE}_"
-        f"n_kfold{N_KFOLDS}"
-    )
-
-    if not os.path.exists(VAL_LOADER_SAVE_DIR):
-        os.makedirs(VAL_LOADER_SAVE_DIR)
-    torch.save(val_data, VAL_LOADER_SAVENAME)

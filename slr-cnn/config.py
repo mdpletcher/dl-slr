@@ -9,7 +9,7 @@ class TrainConfig:
 
     INPUT_HEIGHT: int = 48
     INPUT_WIDTH: int = 24
-    INPUT_CHANNELS: List[str] = field(default_factory = lambda: ["swe_mm_model", "T", "SPD", "Q", "W", "R", ])
+    INPUT_CHANNELS: List[str] = field(default_factory = lambda: ["swe_mm_model", "T", "SPD", "Q", "W", "R"])
     CHANNELS_1D: List[str] = field(default_factory = lambda: ["swe_mm_model",])
 
     CONV1_OUT_CHANNELS: int = 16
@@ -26,12 +26,19 @@ class TrainConfig:
     NUM_EPOCHS: int = 50
     OPTIMIZER: str = "adam"
     LOSS_FN: str = "mse"
+    PATIENCE: int = 7
+    TUNE: bool = True
 
     DEVICE: torch.device = field(default_factory = lambda: torch.device("cuda" if torch.cuda.is_available() else "cpu"))
     SEED: int = 42
     LOG_INTERVAL: int = 10
-    SAVE_MODEL: bool = True
+    SAVE_MODEL: bool = False
 
     BASE_DIR: str = "/uufs/chpc.utah.edu/common/home/steenburgh-group10/mpletcher/DL_SLR/"
-    TF_SAVE_DIR: str = "/uufs/chpc.utah.edu/common/home/steenburgh-group10/mpletcher/DL_SLR/data/pt/sandbox/"
+    PT_SAVE_DIR: str = "/uufs/chpc.utah.edu/common/home/steenburgh-group10/mpletcher/DL_SLR/data/pt/sandbox/"
+    PT_SAVE_STR: str = "with_last_weeks_removed"
+
+    ACC_SAVE_DIR: str = ""
+    MODEL_SAVE_DIR: str = ""
+    HPARAMS_SEARCH_SAVE_DIR: str = "/uufs/chpc.utah.edu/common/home/steenburgh-group10/mpletcher/DL_SLR/data/hparams_search"
     
