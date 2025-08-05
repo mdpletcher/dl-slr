@@ -1,6 +1,5 @@
 import os
 
-
 import numpy as np
 import torch
 
@@ -45,13 +44,15 @@ class DataSetup:
 
         # Create and transform training dataset
         self.train_data = ImageLabelDataset(
-            _data["train_images"],
-            _data["train_labels"],
+            _data["train"]["images"],
+            _data["train"]["labels"],
+            _data["train"]["scalars"],
             transform = transform
         )
         self.val_data = ImageLabelDataset(
-            _data["val_images"],
-            _data["val_labels"]
+            _data["val"]["images"],
+            _data["val"]["labels"],
+            _data["val"]["scalars"],
         )
     
     def train_loader(self) -> None:

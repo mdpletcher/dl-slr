@@ -19,9 +19,10 @@ class ImageLabelDataset(Dataset):
         Labels stored in tensor
     """
 
-    def __init__(self, images, labels, transform = None):
+    def __init__(self, images, labels, scalars = None, transform = None):
         self.images = images
         self.labels = labels
+        self.scalars = scalars
         self.transform = transform
 
     def __len__(self):
@@ -30,9 +31,15 @@ class ImageLabelDataset(Dataset):
     def __getitem__(self, idx):
         image = self.images[idx]
         label = self.labels[idx]
+
         if self.transform:
             image = self.transform(image)
-        return image, label
+
+        if self.scalars is not None:
+            scalar = self.scalars[idx]
+            return image, scalar, label
+        else:
+            return image, label
 
 def create_loader(data, batch_size: int, shuffle: bool) -> torch.utils.data.DataLoader:
     """

@@ -44,28 +44,30 @@ class Train(Metrics):
         and updates model parameters
         """
 
-        outputs = self.c.model(self.inputs)
+        outputs = self.c.model(self.inputs, self.scalars)
         self.loss = self.c.criterion(outputs, self.labels)
         self.loss.backward()
         self.c.optimizer.step()
 
-    def iterate_batches(self) -> None:
+    def iterate_batches(self, lstm = False) -> None:
         """
         Iterate over DataLoader batch and train
         """
-
-        for self.batch, (inputs, labels) in enumerate(
+        for self.batch, (inputs, scalars, labels) in enumerate(
             self.d.dataloaders["train"]
         ):
             self.inputs = inputs.to(config.DEVICE)
+            self.scalars = scalars.to(config.DEVICE)
             self.labels = labels.to(config.DEVICE)
             self.labels = self.labels.view(-1, 1)
 
             self.c.optimizer.zero_grad()
+            # If using LSTM, permute inputs
+            if lstm:
+                self.inputs = self.inputs.permute(0, 3, 1, 2)
             self.train_step()
             self.batch_metrics()
 
-    def run(self) -> None:
-        self.iterate_batches()
+    def run(self, lstm = False) -> None:
+        self.iterate_batches(lstm = lstm)
         self.epoch_metrics()
-        self.print_epoch_metrics("train")

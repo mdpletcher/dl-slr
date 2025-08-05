@@ -6,96 +6,32 @@ given .pickle file
 import pandas as pd
 import numpy as np
 import sys
+import os
 import argparse
 import torch
 
 from functools import partial
 from typing import Callable, List
+from datetime import timedelta
+from sklearn import preprocessing
 
 sys.path.append("./config.py")
 from config import TrainConfig
 
 config = TrainConfig()
-'''
-def allocate_datasets(
-    df: pd.DataFrame,
-    obs_time_col: str,
-    train_frac: float = 0.7,
-    val_frac: float = 0.2,
-    test_frac: float = 0.1
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    assert np.isclose(train_frac + val_frac + test_frac, 1.0), "Fractions must sum to 1."
 
-    """
-    Splits input pandas DataFrame into training, validation, and testing sets based
-    on unique observation times and user defined split fractions. Also remove the last
-    week from the training and validation datasets so that 
+pd.set_option('display.max_rows', 100)
 
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Input DataFrame containing observations, indexed or labeled by observation time
-    
-    obs_time_col : str
-        Name of column that contains the observation time for grouping
-    
-    train_frac : float, default = 0.7
-        Fraction of unique times to allocate to the training set
-    
-    val_frac : float, default = 0.2
-        Fraction of unique times to allocate to the validation set
-    
-    test_frac : float, default = 0.1
-        Fraction of unique times to allocate to the test set
-
-    Returns
-    -------
-    tuple of pd.DataFrame
-        A tuple containing (train_df, val_df, test_df), each sorted by observation time.
-    """
-    assert np.isclose(train_frac + val_frac + test_frac, 1.0), "Fractions must sum to 1."
-    print(
-        "Splitting data into these fractions: Train: %s, Validate: %s, Test: %s" % (train_frac, val_frac, test_frac)
-    )
-
-    # Create column from index because we don't want to remove it
-    df = df.copy()
-    df["obs_collect_time_utc"] = df.index
-
-    # Find unique ob times
-    times = df[obs_time_col] if obs_time_col in df.columns else df.index.to_series()
-    unique_times = np.sort(times.unique())
-
-    # Determine length of each dataset
-    n_total = len(unique_times)
-    n_train = int(n_total * train_frac)
-    n_val = int(n_total * val_frac)
-
-    # Splitting occurs here
-    splits = {
-        "train" : unique_times[:n_train], # Training
-        "val" : unique_times[n_train:n_train + n_val], # Validation
-        "test" : unique_times[n_train + n_val:] # Testing
-    }
-    df.index.name = None
-    print(len(df[df[obs_time_col].isin(splits["train"])].sort_values(by = obs_time_col)))
-    print(len(df[df[obs_time_col].isin(splits["val"])].sort_values(by = obs_time_col)))
-    print(len(df[df[obs_time_col].isin(splits["test"])].sort_values(by = obs_time_col)))
-   
-    return tuple(
-        df[df[obs_time_col].isin(splits[key])].sort_values(by = obs_time_col)
-        for key in ["train", "val", "test"]
-    )
-'''
 def allocate_datasets(
     df: pd.DataFrame,
     obs_time_col: str,
     train_frac: float = 0.7,
     val_frac: float = 0.2,
     test_frac: float = 0.1,
-    buffer_days = 7
+    buffer_days = 7,
+    fsave: bool = False,
+    save_dir: str = "./dataset_splits"
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    assert np.isclose(train_frac + val_frac + test_frac, 1.0), "Fractions must sum to 1."
 
     """
     Splits input pandas DataFrame into training, validation, and testing sets based
@@ -130,6 +66,15 @@ def allocate_datasets(
         "Splitting data into these fractions: Train: %s, Validate: %s, Test: %s" % (train_frac, val_frac, test_frac)
     )
 
+    # Remove Alaska and Canada sites
+    df = df[~df["site"].str.contains(r"\b(AK|CAN)\b", regex = True)]
+
+    # Create column for numeric sites for saving as tensors
+    df["site_numeric"] = preprocessing.LabelEncoder().fit_transform(list(df["site"]))
+    # Map lat/lon to x, y, and z coords 
+    # (https://datascience.stackexchange.com/questions/13567/ways-to-deal-with-longitude-latitude-feature/13575#13575)
+    df["sin_lat"] = np.sin(np.radians(df["site_lat"]))
+
     # Create column from index because we don't want to remove it
     df = df.copy()
     df.index.name = None
@@ -146,7 +91,7 @@ def allocate_datasets(
     test_times = unique_times[-n_test:]
     test_start_date = test_times.min()
     val_test_buffer_start = test_start_date - pd.Timedelta(days = buffer_days)
-
+    
     # All times before the val-test buffer
     before_val_test_buffer = unique_times[unique_times < val_test_buffer_start]
 
@@ -155,7 +100,7 @@ def allocate_datasets(
     val_start_idx = int(len(before_val_test_buffer) * (train_frac / (train_frac + val_frac)))
     val_start_time = before_val_test_buffer[val_start_idx]
     train_val_buffer_start = val_start_time
-    train_val_buffer_end = train_val_buffer_start + pd.Timedelta(days=buffer_days)
+    train_val_buffer_end = train_val_buffer_start + pd.Timedelta(days = buffer_days)
 
     # Create train and val times with buffer
     train_times = before_val_test_buffer[before_val_test_buffer < train_val_buffer_start]
@@ -171,11 +116,13 @@ def allocate_datasets(
         "test": test_times
     }
 
-    # Return split dataframes
-    return tuple(
-        df[df[obs_time_col].isin(splits[key])].sort_values(by = obs_time_col)
+    # Allocate datasets
+    datasets = {
+        key: df[df[obs_time_col].isin(splits[key])].sort_values(by = obs_time_col)
         for key in ["train", "val", "test"]
-    )
+    }
+
+    return datasets["train"], datasets["val"], datasets["test"]
 
 def get_input_images(
     df: pd.DataFrame,
@@ -218,11 +165,14 @@ def get_input_images(
     for (_, _), group in df_group:
         group = group.sort_values(by = analysis_time_col)
         if len(group) < 24:
-            #print("Invalid group length of %s; must be 24" % len(group))
+            print("Invalid group length of %s; must be 24" % len(group))
             continue
         # For 1-d channels (precipitation, refreezing energy, etc.)
         if channel in channels_1d:
             image_1d = group[[channel]].to_numpy()
+            # Log scale precipitation
+            if channel == "swe_mm_model":
+                image_1d = np.log1p(image_1d)
             # Broadcast 1d channels to the input heights
             image = np.repeat(
                 image_1d,
@@ -234,9 +184,50 @@ def get_input_images(
             image = group[
                 ["%s%02dK" % (channel, level) for level in levels]
             ].to_numpy().T[::-1, :]
-        print(image.shape)
         images.append(image)
     return np.stack(images)
+
+def get_scalars(
+    df: pd.DataFrame,
+    obs_time_col: str, 
+    site_col: str,
+    analysis_time_col: str,
+    scalar_cols: List[str]
+) -> np.array:
+    """
+    Extract scalar values for grouped images
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame containing all image data and labels
+    obs_time_col : str
+        Column name for observation time (used for grouping)
+    site_col : str
+        Column name for site ID (used for grouping)
+    analysis_time_col : str
+        Column with date and time of analysis or forecast hour
+    scalar_col : str
+        Name of the column containing the scalars
+
+    Returns:
+    --------
+    np.ndarray
+        Array of shape (n_samples, n_scalar_features)
+    """
+
+    scalars = []
+    df_group = df.groupby([obs_time_col, site_col])
+    print("Getting scalars for columns: %s" % scalar_cols)
+
+    for (_, _), group in df_group:
+        group = group.sort_values(by = analysis_time_col)
+        if len(group) < 24:
+            continue
+        scalar_values = [group[col].iloc[0] for col in scalar_cols]
+        scalars.append(scalar_values)
+
+    return np.array(scalars, dtype = np.float32)
 
 def get_labels(
     df: pd.DataFrame,
@@ -256,6 +247,8 @@ def get_labels(
         Column name for observation time (used for grouping)
     site_col : str
         Column name for site ID (used for grouping)
+    analysis_time_col : str
+        Column with date and time of analysis or forecast hour
     label_col : str
         Name of the column containing the labels (target variable)
 
@@ -277,10 +270,55 @@ def get_labels(
         labels.append(label)
     return np.array(labels)
 
+def get_metadata(
+    df: pd.DataFrame,
+    obs_time_col: str, 
+    site_col: str,
+    analysis_time_col: str,
+    metadata_cols: List[str]
+) -> np.array:
+    """
+    Extract metadata for grouped images
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame containing all image data and labels
+    obs_time_col : str
+        Column name for observation time (used for grouping)
+    site_col : str
+        Column name for site ID (used for grouping)
+    analysis_time_col : str
+        Column with date and time of analysis or forecast hour
+    metadata_col : str
+        Name of the column containing the metadata
+
+    Returns:
+    --------
+    np.ndarray
+        Array of shape (n_samples, n_metadata_cols)
+    """
+
+    # Convert time to timestamp, site name to number because you
+    # cannot store strings as tensors
+    df["obs_collect_time_utc"] = df["obs_collect_time_utc"].apply(lambda x: x.timestamp())
+    df_group = df.groupby([obs_time_col, site_col])
+    print("Getting metadata for columns: %s" % metadata_cols)
+
+    metadatas = []
+    for (_, _), group in df_group:
+        group = group.sort_values(by = analysis_time_col)
+        if len(group) < 24: 
+            continue
+        metadata_values = [group[col].iloc[0] for col in metadata_cols]
+        metadatas.append(metadata_values)
+
+    return np.array(metadatas, dtype = np.float32)
+
 def combine_channels(
     get_input_images_fn: Callable[[str], np.ndarray], 
     channels: List[str]
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Combine single channels images into multi-channel images
     
@@ -302,36 +340,30 @@ def combine_channels(
     ]
     return np.stack(img_list, axis = -1)
 
-def clean_data(images: np.ndarray, labels: np.ndarray) -> np.ndarray:
-    """
-    Remove NaNs or infinite values from data
-
-    Parameters:
-    ----------
-    images : np.ndarray
-        Images to be input to CNN [assumes shape of (batch_size, channels, height, width)]
-    labels : np.ndarray
-        Labels to be input to CNN
+def clean_data(
+    df: pd.DataFrame, 
+    columns: List[str],
+    obs_time_col: str,
+    site_col: str,
+    fsave: bool,
+    save_dir: str,
+    save_str: str
+) -> pd.DataFrame:
     
-    Returns:
-    -------
-    np.ndarray
-        Cleaned images and labels
-    """
-    valid_data = (
-        ~np.isnan(images).any(axis = (1, 2, 3)) &
-        ~np.isinf(images).any(axis = (1, 2, 3)) &
-        ~np.isnan(labels) &
-        ~np.isinf(labels)
-    ) 
+    df_group = df.groupby([obs_time_col, site_col])
+    def clean_group(group):
+        return np.isfinite(group[columns]).all().all()
 
-    images_cleaned, labels_cleaned = images[valid_data], labels[valid_data]
-
-    print(
-        "Removed %s invalid samples" % str((len(images)) - len(images_cleaned))
+    df_clean = pd.concat(
+        [group for _, group in df_group if clean_group(group)],
+        ignore_index = True
     )
 
-    return images_cleaned, labels_cleaned
+    if fsave:
+        df_clean.to_pickle(save_dir + save_str)
+
+    # Cleaned dataframe
+    return df_clean
 
 def normalize_images(images: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
@@ -351,25 +383,51 @@ def normalize_images(images: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.nda
     std : np.ndarray
         Per-channel std used for normalization
     """
-    print("Normalizing images...")
-    mean = images.mean(
-        axis = (0, 1, 2),
-        keepdims = True
-    )
-    std = images.std(
-        axis = (0, 1, 2),
-        keepdims = True
-    )
+    print("Normalizing train images...")
+    mean = images.mean(axis = (0, 1, 2), keepdims = True)
+    std = images.std(axis = (0, 1, 2), keepdims = True)
     normalized_images = (images - mean) / std
 
     return normalized_images, mean.squeeze(), std.squeeze()
 
-def apply_normalization(
+def normalize_scalars(scalars: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Standardize scalars (e.g., lat/lon/elev) using training data mean and std.
+
+    Parameters:
+    ----------
+    scalars : np.ndarray
+        Array of shape (N, D), where D is the number of scalar features (e.g., 3 for lat/lon/elev)
+
+    Returns:
+    -------
+    normalized_scalars : np.ndarray
+        Standardized scalars
+    mean : np.ndarray
+        Per-feature mean
+    std : np.ndarray
+        Per-feature std
+    """
+    print("Normalizing train scalars...")
+    mean = scalars.mean(axis = 0, keepdims = True)
+    std = scalars.std(axis = 0, keepdims = True)
+    normalized_scalars = (scalars - mean) / std
+
+    return normalized_scalars, mean.squeeze(), std.squeeze()
+
+def apply_img_norm(
     images: np.ndarray, 
     mean: List[float], 
     std: List[float]
 ) -> np.ndarray:
     return (images - mean[None, None, None, :]) / std[None, None, None, :]
+
+def apply_scalar_norm(
+    scalars: np.ndarray, 
+    mean: np.ndarray,
+    std: np.ndarray
+):
+    return (scalars - mean[None, :]) / std[None, :]
 
 def to_tensor(x: np.ndarray) -> torch.Tensor:
     """
@@ -378,7 +436,7 @@ def to_tensor(x: np.ndarray) -> torch.Tensor:
     Parameters:
     ----------
     x : np.ndarray
-        Numpy array to be convert
+        Numpy array to be converted
 
     Returns:
     -------
@@ -405,12 +463,56 @@ def main() -> None:
     pickle_file = pd.read_pickle(args.pkl_file)
 
     obs_time_col = "obs_collect_time_utc"
+    site_col = "site"
 
     # Split data
-    train_df, val_df, test_df = allocate_datasets(
-        pickle_file,
-        obs_time_col = obs_time_col
+    train_df, val_df, test_df = allocate_datasets(pickle_file, obs_time_col = obs_time_col)
+
+    print("Original train size:", len(train_df))
+    print("Original validation size:", len(val_df))
+    print("Original test size:", len(test_df))
+
+    # Remove NaNs and infs from features due to problematic ERA5 data
+    features_2d = ["T", "SPD", "Q", "W", "R"]
+    cols_to_check = (
+        config.CHANNELS_1D +
+        config.SCALARS +
+        [f"{feat}{lev:02d}K" for feat in features_2d for lev in range(1, config.INPUT_HEIGHT)]
     )
+    # Clean data
+    train_df = clean_data(
+        train_df, 
+        cols_to_check, 
+        obs_time_col, 
+        site_col, 
+        fsave = False,
+        save_dir = config.SPLIT_DATA_SAVE_DIR,
+        save_str = "train_split_data.pkl"
+    )
+    val_df = clean_data(
+        val_df, 
+        cols_to_check, 
+        obs_time_col, 
+        site_col, 
+        fsave = False,
+        save_dir = config.SPLIT_DATA_SAVE_DIR,
+        save_str = "val_split_data.pkl"
+    )
+    test_df  = clean_data(
+        test_df, 
+        cols_to_check, 
+        obs_time_col, 
+        site_col,
+        fsave = False,
+        save_dir = config.SPLIT_DATA_SAVE_DIR,
+        save_str = "test_split_data.pkl"
+    )
+
+    print("Cleaned train size:", len(train_df))
+    print("Cleaned validation size:", len(val_df))
+    print("Cleaned test size:", len(test_df))
+
+    #train_df_events = 
 
     # Config settings
     channels = config.INPUT_CHANNELS
@@ -435,6 +537,7 @@ def main() -> None:
         )
         for df in [train_df, val_df, test_df]
     ]
+    print("Finished creating images")
 
     # Get labels for training, validation, and testing datasets
     train_labels, val_labels, test_labels = [
@@ -447,49 +550,91 @@ def main() -> None:
         )
         for df in [train_df, val_df, test_df]
     ]
-    print("Finished creating images")
+    print("Finished getting labels")
 
-    # Clean data
-    train_images, train_labels = clean_data(train_images, train_labels)
-    val_images, val_labels = clean_data(val_images, val_labels)
-    test_images, test_labels = clean_data(test_images, test_labels)
+    # Get scalars for training, validation, and testing datasets
+    train_scalars, val_scalars, test_scalars = [
+        get_scalars(
+            df,
+            obs_time_col = obs_time_col,
+            site_col = "site",
+            analysis_time_col = "time",
+            scalar_cols = config.SCALARS
+        )
+        for df in [train_df, val_df, test_df]
+    ]
+    print("Finished getting scalars")
+
+    # Get site metadata
+    train_metadata, val_metadata, test_metadata = [
+        get_metadata(
+            df,
+            obs_time_col = obs_time_col,
+            site_col = "site",
+            analysis_time_col = "time",
+            metadata_cols = config.METADATA
+        )
+        for df in [train_df, val_df, test_df]
+    ]
+    print("Finished getting metadata")
+    print(train_metadata)
 
     # Normalize images based on training dataset
     train_images, mean, std = normalize_images(train_images)
-    val_images = apply_normalization(val_images, mean, std)
-    test_images = apply_normalization(test_images, mean, std)
-    
+    val_images = apply_img_norm(val_images, mean, std)
+    test_images = apply_img_norm(test_images, mean, std)
+
+    # Normalize scalars based on training dataset
+    train_scalars, mean, std = normalize_scalars(train_scalars)
+    val_scalars = apply_scalar_norm(val_scalars, mean, std)
+    test_scalars = apply_scalar_norm(test_scalars, mean, std)
+
     # Convert to tensors 
     train_images_tensor = to_tensor(train_images)
     train_labels_tensor = to_tensor(train_labels)
+    train_scalars_tensor = to_tensor(train_scalars)
+    train_metadata_tensor = to_tensor(train_metadata)
 
     val_images_tensor = to_tensor(val_images)
     val_labels_tensor = to_tensor(val_labels)
+    val_scalars_tensor = to_tensor(val_scalars)
+    val_metadata_tensor = to_tensor(val_metadata)
 
     test_images_tensor = to_tensor(test_images)
     test_labels_tensor = to_tensor(test_labels)
+    test_scalars_tensor = to_tensor(test_scalars)
+    test_metadata_tensor = to_tensor(test_metadata)
 
-    # Save train/validation datasets
+    # Create dicts to save data
+    data_to_save = {
+        "train": {
+            "images": train_images_tensor,
+            "labels": train_labels_tensor,
+            "scalars": train_scalars_tensor,
+            "metadata": train_metadata_tensor,
+        },
+        "val": {
+            "images": val_images_tensor,
+            "labels": val_labels_tensor,
+            "scalars": val_scalars_tensor,
+            "metadata": val_metadata_tensor,
+        },
+        "test": {
+            "images": test_images_tensor,
+            "labels": test_labels_tensor,
+            "scalars": test_scalars_tensor,
+            "metadata": test_metadata_tensor,
+        }
+    }
+
+    # Save data
     print("Saving datasets")
     channels_str = "_".join(channels)
-    torch.save(
-        {
-            "train_images": train_images_tensor,
-            "train_labels": train_labels_tensor,
-            "val_images": val_images_tensor,
-            "val_labels": val_labels_tensor,
-        }, 
-        config.PT_SAVE_DIR + "train_val_data_with_%s_channels_%s.pt" % (channels_str, config.PT_SAVE_STR)
+    save_path = os.path.join(
+        config.PT_SAVE_DIR,
+        f"train_val_test_data_{channels_str}_channels_{config.PT_SAVE_STR}.pt"
     )
-
-    # Save testing dataset
-    torch.save(
-        {
-            "test_images": test_images_tensor,
-            "test_labels": test_labels_tensor,
-        }, 
-        config.PT_SAVE_DIR + "test_dataset_with_%s_channels.pt" % channels_str
-    )
+    torch.save(data_to_save, save_path)
     
 if __name__ == "__main__":
     main()

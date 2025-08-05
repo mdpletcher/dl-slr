@@ -53,7 +53,7 @@ class Validation(Metrics):
     def predict(self) -> None:
         """Predict SLR and compute loss"""
         with torch.no_grad():
-            self.preds = self.c.model(self.inputs)
+            self.preds = self.c.model(self.inputs, self.scalars)
             self.loss = self.c.criterion(self.preds, self.labels)
 
     def append_preds(self) -> None:
@@ -82,38 +82,34 @@ class Validation(Metrics):
 
     def reduce_lr(self) -> None:
         """Reduce learning rate if epoch loss plateaus"""
-        scheduler = ReduceLROnPlateau(
-            self.c.optimizer,
-            mode = "min",
-            factor = 0.5,
-            patience = config.PATIENCE,
-            verbose = True,
-            eps = 1e-4
-        )
-        scheduler.step(self.epoch_loss)
+        old_lr = self.c.optimizer.param_groups[0]["lr"]
+        self.c.scheduler.step(self.epoch_loss)
+        new_lr = self.c.optimizer.param_groups[0]["lr"]
+        if new_lr < old_lr:
+            print(f"[Epoch {self.epoch}] LR reduced from {old_lr:.6e} to {new_lr:.6e}")
 
-    def iterate_batches(self) -> None:
+    def iterate_batches(self, lstm = False) -> None:
         """Iterate over batch in val dataloader and predict"""
-        for self.batch, (inputs, labels) in enumerate(
+        for self.batch, (inputs, scalars, labels) in enumerate(
             self.d.dataloaders["val"]
         ):
             self.inputs = inputs.to(config.DEVICE)
+            self.scalars = scalars.to(config.DEVICE)
             self.labels = labels.to(config.DEVICE)
             self.labels = self.labels.view(-1, 1)
 
+            # If using LSTM, permute inputs
+            if lstm:
+                self.inputs = self.inputs.permute(0, 3, 1, 2)
+
             # Make predictions
             self.predict()
-            #print(self.loss)
-            #print(self.preds)
             self.batch_metrics()
-            #print(self.totals)
             self.append_preds()
 
-    def run(self) -> torch.Tensor:
-        self.iterate_batches()
+    def run(self, lstm = False) -> torch.Tensor:
+        self.iterate_batches(lstm = lstm)
         self.epoch_metrics()
-        if not config.TUNE:
-            self.reduce_lr()
         val_best_loss = self.save_model()
         #if config.TUNE:
         #    tune.report(loss = self.epoch_loss)
